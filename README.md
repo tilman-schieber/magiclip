@@ -109,3 +109,7 @@ The shell is not started from fish, so a key set with `set -U` is not in its
 environment; the runner asks fish for it.
 
 Needs `curl`, `jq`, `wl-clipboard`, `wtype`.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
