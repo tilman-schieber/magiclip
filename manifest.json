@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.tilman-schieber.magiclip",
+  "name": "MagiClip",
+  "version": "0.2.0",
+  "author": "Tilman Schieber",
+  "license": "MIT",
+  "description": "Pick or type a prompt, send the clipboard text through Claude with it, and review the answer before it goes on the clipboard (or replace the clipboard silently).",
+  "kinds": [
+    "overlay",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "MagiClip.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "MagiClip",
+    "description": "Settings for MagiClip: whether answers are shown or replace the clipboard silently, which Claude model to use, and the saved prompts. Settings live in ~/.config/magiclip/config.json; \"Show in bar\" off hides this button.",
+    "category": "Tools",
+    "aliases": [
+      "ai",
+      "claude",
+      "clipboard",
+      "magiclip"
+    ],
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}

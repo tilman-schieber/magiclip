@@ -1,0 +1,233 @@
+#!/bin/bash
+# magiclip: send the clipboard text to an LLM with an instruction.
+#
+#   magiclip "Fix spelling and grammar."             answer replaces the clipboard, with notifications
+#   magiclip --print "Fix spelling and grammar."     answer on stdout, errors on stderr, no notifications
+#   magiclip --local "…" / magiclip --cloud "…"      this run only: local model (Ollama) or Claude
+#   magiclip --list-local                            local model names, one per line
+#
+# Settings come from ~/.config/magiclip/config.json (written by the overlay and
+# the bar widget):
+#   backend      "claude" (default) or "local"
+#   model        Claude model; effort  low | medium | high
+#   localUrl     Ollama base URL, default http://localhost:11434
+#   localModel   Ollama model; empty = the first one installed
+#   instructions standing preferences added to every request
+# MAGICLIP_MODEL / MAGICLIP_EFFORT / MAGICLIP_LOCAL_MODEL override.
+#
+# Claude API key: ANTHROPIC_API_KEY, else ~/.config/magiclip/api-key, else
+# fish's universal variables (the shell is not started by fish, so a `set -U`
+# key is not in its environment).
+
+set -uo pipefail
+
+CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/magiclip
+STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/magiclip
+GLYPH="󰨸"
+# Context window for local models. Ollama's default is small enough to cut
+# off a long clipboard silently; an 8B model at 16k fits easily in 12 GB.
+LOCAL_CONTEXT=16384
+
+config() {
+  jq -r --arg key "$1" '.[$key] // empty' "$CONFIG_DIR/config.json" 2>/dev/null
+}
+
+MODEL=${MAGICLIP_MODEL:-$(config model)}
+MODEL=${MODEL:-claude-sonnet-5-5}
+EFFORT=${MAGICLIP_EFFORT:-$(config effort)}
+EFFORT=${EFFORT:-low}
+BACKEND=$(config backend)
+[[ $BACKEND == local ]] || BACKEND=claude
+LOCAL_URL=$(config localUrl)
+LOCAL_URL=${LOCAL_URL:-http://localhost:11434}
+LOCAL_URL=${LOCAL_URL%/}
+LOCAL_MODEL=${MAGICLIP_LOCAL_MODEL:-$(config localModel)}
+
+SYSTEM='You transform text taken from the user'"'"'s clipboard according to their instruction.
+Reply with only the resulting text, ready to paste in place of the original: no preamble, no closing remarks, no quotes or code fences around the whole answer.
+Keep the language of the original text unless the instruction asks for another.
+If the instruction asks a question about the text, answer it directly and concisely.'
+
+# Standing preferences from the settings ("Always apply"), e.g. spelling
+# conventions or punctuation rules. They apply to every prompt.
+INSTRUCTIONS=$(config instructions)
+if [[ -n ${INSTRUCTIONS//[[:space:]]/} ]]; then
+  SYSTEM+=$'\n\nThe user'"'"$'s standing preferences. Follow them in every answer unless the instruction for this request says otherwise:\n<preferences>\n'"$INSTRUCTIONS"$'\n</preferences>'
+fi
+
+list_local() {
+  curl -sS --max-time 3 "$LOCAL_URL/api/tags" 2>/dev/null | jq -r '.models[]?.name' 2>/dev/null
+}
+
+print=false
+while (($# > 0)); do
+  case $1 in
+  --print) print=true ;;
+  --local) BACKEND=local ;;
+  --cloud) BACKEND=claude ;;
+  --list-local) list_local; exit ;;
+  --) shift; break ;;
+  -*) echo "unknown option: $1" >&2; exit 2 ;;
+  *) break ;;
+  esac
+  shift
+done
+
+notify_id=0
+notify() {
+  $print && return
+  local args=(-g "$GLYPH" -p)
+  ((notify_id > 0)) && args+=(-r "$notify_id")
+  local id
+  id=$(omarchy-notification-send "${args[@]}" "$@" 2>/dev/null) && [[ $id =~ ^[0-9]+$ ]] && notify_id=$id
+}
+
+fail() {
+  notify -u critical "MagiClip failed" "$1"
+  echo "$1" >&2
+  exit 1
+}
+
+api_key() {
+  if [[ -n ${ANTHROPIC_API_KEY:-} ]]; then
+    printf %s "$ANTHROPIC_API_KEY"
+  elif [[ -r $CONFIG_DIR/api-key ]]; then
+    tr -d '[:space:]' <"$CONFIG_DIR/api-key"
+  elif command -v fish >/dev/null; then
+    fish -c 'printf %s "$ANTHROPIC_API_KEY"' 2>/dev/null
+  fi
+}
+
+# First line of the answer, shortened, for the notification.
+preview() {
+  local line=${1%%$'\n'*}
+  ((${#line} > 120)) && line="${line:0:117}…"
+  printf %s "$line"
+}
+
+prompt=${1:-}
+[[ -n ${prompt//[[:space:]]/} ]] || { echo "usage: magiclip [--print] [--local|--cloud] <instruction>" >&2; exit 2; }
+
+input=$(wl-paste --no-newline --type text 2>/dev/null) || input=""
+[[ -n ${input//[[:space:]]/} ]] || fail "The clipboard has no text."
+
+mkdir -p "$STATE_DIR"
+response_file="$STATE_DIR/last-response.json"
+user_message=$(printf %s "$input" | jq -Rs --arg prompt "$prompt" \
+  '"<instruction>\n" + $prompt + "\n</instruction>\n\n<text>\n" + . + "\n</text>"')
+
+# Both backends set: answer, cut_off (true/false).
+
+ask_claude() {
+  local key
+  key=$(api_key)
+  [[ -n $key ]] || fail "No API key: set ANTHROPIC_API_KEY or write it to ~/.config/magiclip/api-key."
+
+  # Server-side refusal fallback; Haiku has none.
+  local headers=() fallbacks=true
+  if [[ $MODEL == claude-haiku-* ]]; then
+    fallbacks=false
+  else
+    headers+=(-H "anthropic-beta: server-side-fallback-2026-07-01")
+  fi
+
+  notify "Asking $MODEL…" "$prompt"
+
+  local body status
+  body=$(jq -n --arg model "$MODEL" --arg effort "$EFFORT" --arg system "$SYSTEM" \
+    --argjson content "$user_message" --argjson fallbacks "$fallbacks" '{
+      model: $model,
+      max_tokens: 16000,
+      system: $system,
+      output_config: { effort: $effort },
+      messages: [{ role: "user", content: $content }]
+    } + (if $fallbacks then { fallbacks: "default" } else {} end)') || fail "Could not build the request."
+
+  status=$(printf %s "$body" | curl -sS --max-time 300 \
+    -o "$response_file" -w '%{http_code}' \
+    https://api.anthropic.com/v1/messages \
+    -H "content-type: application/json" \
+    -H "x-api-key: $key" \
+    -H "anthropic-version: 2026-10-21" \
+    "${headers[@]}" \
+    --data-binary @- 2>&1) || fail "Request failed: $status"
+
+  if [[ $status != 200 ]]; then
+    local message
+    message=$(jq -r '.error.message // empty' "$response_file" 2>/dev/null)
+    fail "HTTP $status${message:+: $message}"
+  fi
+
+  local stop_reason
+  stop_reason=$(jq -r '.stop_reason // empty' "$response_file")
+  if [[ $stop_reason == refusal ]]; then
+    local category
+    category=$(jq -r '.stop_details.category // empty' "$response_file")
+    fail "Claude declined this request${category:+ ($category)}."
+  fi
+
+  answer=$(jq -r '[.content[]? | select(.type == "text") | .text] | join("")' "$response_file")
+  [[ -n ${answer//[[:space:]]/} ]] || fail "Claude returned no text (stop reason: ${stop_reason:-unknown})."
+  [[ $stop_reason == max_tokens ]] && cut_off=true || cut_off=false
+}
+
+ask_local() {
+  if [[ -z $LOCAL_MODEL ]]; then
+    LOCAL_MODEL=$(list_local | head -n1)
+    [[ -n $LOCAL_MODEL ]] || fail "No local model: is Ollama running at $LOCAL_URL with a model pulled?"
+  fi
+
+  notify "Asking $LOCAL_MODEL (local)…" "$prompt"
+
+  # think:false keeps reasoning models (Qwen 3 and the like) from spending
+  # the time on a hidden chain of thought; models without thinking may reject
+  # the field, so a request that fails on it is sent again without.
+  local think status message
+  for think in false omit; do
+    local body
+    body=$(jq -n --arg model "$LOCAL_MODEL" --arg system "$SYSTEM" --argjson content "$user_message" \
+      --argjson ctx "$LOCAL_CONTEXT" --arg think "$think" '{
+        model: $model,
+        stream: false,
+        options: { num_ctx: $ctx },
+        messages: [
+          { role: "system", content: $system },
+          { role: "user", content: $content }
+        ]
+      } + (if $think == "false" then { think: false } else {} end)') || fail "Could not build the request."
+
+    status=$(printf %s "$body" | curl -sS --max-time 300 \
+      -o "$response_file" -w '%{http_code}' \
+      "$LOCAL_URL/api/chat" \
+      -H "content-type: application/json" \
+      --data-binary @- 2>&1) || fail "Ollama is not reachable at $LOCAL_URL."
+
+    [[ $status == 200 ]] && break
+    message=$(jq -r '.error // empty' "$response_file" 2>/dev/null)
+    [[ $think == false && $message == *think* ]] && continue
+    fail "Ollama: HTTP $status${message:+: $message}"
+  done
+
+  # Some models still write <think>…</think> into the answer; drop it.
+  answer=$(jq -r '.message.content // "" | gsub("(?s)<think>.*?</think>\\s*"; "")' "$response_file")
+  [[ -n ${answer//[[:space:]]/} ]] || fail "$LOCAL_MODEL returned no text."
+  [[ $(jq -r '.done_reason // empty' "$response_file") == length ]] && cut_off=true || cut_off=false
+}
+
+answer=""
+cut_off=false
+if [[ $BACKEND == local ]]; then ask_local; else ask_claude; fi
+
+if $print; then
+  printf %s "$answer"
+  $cut_off && echo "The answer hit the length limit and is cut off." >&2
+  exit 0
+fi
+
+printf %s "$answer" | wl-copy --type text/plain
+
+if $cut_off; then
+  notify -u normal "Copied, but cut off" "The answer hit the length limit. $(preview "$answer")"
+else
+  notify "Copied to clipboard" "$(preview "$answer")"
+fi
