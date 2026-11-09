@@ -24,8 +24,8 @@ With **Show result** (the default) the answer appears in the overlay:
 
 | Key | Action |
 |---|---|
-| `Enter` | copy the answer and close |
-| `Shift+Enter` | copy it and paste it into the window you came from (Shift+Insert) |
+| `Enter` | copy the answer and paste it into the window you came from (Shift+Insert) |
+| `Shift+Enter` | only copy it and close |
 | `Ctrl+R` | ask again |
 | `Ctrl+L` | ask again with the other backend |
 | `Backspace` | back to the prompts |

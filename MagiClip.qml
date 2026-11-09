@@ -9,8 +9,8 @@ import qs.Ui
 // Overlay for bin/magiclip. Type to filter the saved prompts or type a new
 // one; Enter sends the clipboard text to Claude with it.
 //
-// In "review" mode the answer is shown here first (Enter copies it,
-// Shift+Enter copies and pastes it into the focused window); in "silent" mode
+// In "review" mode the answer is shown here first (Enter copies it and pastes
+// it into the focused window, Shift+Enter only copies it); in "silent" mode
 // the overlay closes and the runner replaces the clipboard on its own.
 // Ctrl+S switches to the settings (the same ones as the bar widget).
 Item {
@@ -186,8 +186,8 @@ Item {
     if (root.runPrompt) root.run(root.runPrompt)
   }
 
-  // Enter: copy. Shift+Enter: copy, then paste into the window that had
-  // focus before the overlay (Shift+Insert works in terminals and GUI apps).
+  // Enter: copy, then paste into the window that had focus before the overlay
+  // (Shift+Insert works in terminals and GUI apps). Shift+Enter: copy only.
   function useResult(paste) {
     if (!root.resultText) return
     var text = root.resultText
@@ -480,7 +480,7 @@ Item {
               root.retry()
               event.accepted = true
             } else if (root.view === "result" && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
-              root.useResult(event.modifiers & Qt.ShiftModifier)
+              root.useResult(!(event.modifiers & Qt.ShiftModifier))
               event.accepted = true
             } else if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
               resultFlick.contentY = Math.max(0, Math.min(resultFlick.contentHeight - resultFlick.height,
@@ -539,7 +539,7 @@ Item {
               text: root.view === "running" ? "⌫ back   esc cancel"
                 : root.errorText ? "⌃R retry   ⌃L ask " + (root.runLocal ? "Claude" : "local") + "   ⌫ back   esc close"
                 : (root.warningText ? root.warningText + "   ·   " : "")
-                  + "⏎ copy   ⇧⏎ copy & paste   ⌃R retry   ⌃L ask " + (root.runLocal ? "Claude" : "local")
+                  + "⏎ paste   ⇧⏎ copy only   ⌃R retry   ⌃L ask " + (root.runLocal ? "Claude" : "local")
                   + "   ⌫ back   esc discard   ·   " + store.backendLabel(root.runLocal)
             }
           }

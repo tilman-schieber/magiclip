@@ -265,7 +265,7 @@ Column {
     }
     Label {
       text: view.store.mode === "review"
-        ? "The answer appears in the overlay; Enter copies it, Shift+Enter copies and pastes it."
+        ? "The answer appears in the overlay; Enter pastes it where you were, Shift+Enter only copies it."
         : "The overlay closes and the answer replaces the clipboard; a notification shows when it's done."
     }
   }
