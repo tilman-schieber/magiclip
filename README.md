@@ -5,6 +5,8 @@ through Claude, or through a local model with Ollama. Copy some text, press the 
 one), and read the answer before copying it, or let it replace the clipboard
 silently. A bar button holds the settings.
 
+![MagiClip overlay: saved prompts on the left, the clipboard text on the right](docs/screenshot.png)
+
 ## Use
 
 | Key | Action |
@@ -70,9 +72,24 @@ model is fine for translation and rewording but misses grammar fixes Claude catc
 
 ## Install
 
+Needs a recent [Omarchy](https://omarchy.org/) (4.5 or later; it is an Omarchy shell plugin), `curl`, `jq`,
+`wl-clipboard` and `wtype`. Elsewhere only the [runner](#runner) works, from the terminal.
+
 ```sh
+git clone https://github.com/tilman-schieber/magiclip ~/src/magiclip
 ln -s ~/src/magiclip ~/.config/omarchy/plugins/io.github.tilman-schieber.magiclip
 ```
+
+For Claude you need your own Anthropic API key ([console.anthropic.com](https://console.anthropic.com/)). Put it
+in `~/.config/magiclip/api-key`, or set `ANTHROPIC_API_KEY`:
+
+```sh
+mkdir -p ~/.config/magiclip
+install -m 600 /dev/null ~/.config/magiclip/api-key
+$EDITOR ~/.config/magiclip/api-key   # paste the key
+```
+
+Without a key, use a [local model](#local-models) instead.
 
 Put the bar button on the bar (this also enables the overlay):
 
